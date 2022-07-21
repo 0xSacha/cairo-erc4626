@@ -12,6 +12,9 @@ from openzeppelin.token.erc20.library import ERC20
 
 from dependencies.erc4626.library import ERC4626, ERC4626_asset, Deposit, Withdraw
 from dependencies.erc4626.utils.fixedpointmathlib import mul_div_down, mul_div_up
+from dependencies.erc4626.interfaces.IJediSwapPair import IJediSwapPair
+
+
 
 # @title Generic ERC4626 vault (copy this to build your own).
 # @description An ERC4626-style vault implementation.
@@ -25,9 +28,14 @@ from dependencies.erc4626.utils.fixedpointmathlib import mul_div_down, mul_div_u
 
 @constructor
 func constructor{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-        asset : felt, name : felt, symbol : felt):
+        asset : felt, name : felt, symbol : felt, tokenLP1_ : felt, tokenLP2_, oracle_address : felt, tokenLP1_root, tokenLP2_root : felt):
     ERC4626.initializer(asset, name, symbol)
-    
+    tokenLP1.write(tokenLP1_)
+    tokenLP1_root.write(tokenLP1_root)
+    tokenLP2.write(tokenLP2_)
+    tokenLP2.write(tokenLP2_root)
+    empiric_oracle.write(oracle_address)
+
     return ()
 end
 
@@ -43,6 +51,22 @@ end
 #############################################
 #                 STORAGE                   #
 #############################################
+
+@storage_var
+func tokenLP1() -> (asset: felt):
+end
+
+@storage_var
+func tokenLP2() -> (asset: felt):
+end
+
+@storage_var
+func empiric_oracle() -> (asset: felt):
+end
+
+
+const AGGREGATION_MODE = 0  # default
+
 
 #############################################
 #                  ACTIONS                  #
@@ -277,7 +301,26 @@ end
 
 @view
 func totalAssets() -> (totalManagedAssets : Uint256):
-    ERC20.
+    let (contract_address) = get_contract_address()
+    let (asset_address) = asset()
+    let (asset_amount) = IERC20.balance_of(asset_address, contract_address)
+    let (tokenLP1_address) = tokenLP1.read()
+    let (tokenLP1_amount) = IERC20.balance_of(tokenLP1_address, contract_address)   
+    let (tokenLP2_address) = tokenLP2.read()
+    let (tokenLP2_amount) = IERC20.balance_of(tokenLP2_address, contract_address)    
+    let (oracle_) = empiric_oracle.read()
+    let (reserve0_, reserve1_) = IJediSwapPair.get_reserves(tokenLP1_address)
+    let (eth_amount_lp1) = convert_to_eth(reserve0_, reserve1_)
+    let (reserve2_, reserve3_) = IJediSwapPair.get_reserves(tokenLP1_address)
+    let (eth_amount_lp2) = convert_to_eth(reserve2_, reserve3_)
+
+    let (reserve2_
+
+    let (other_asset_price, decimals, timestamp, num_sources_aggregated) = IEmpiricOracle.get_value(
+        oracle_, KEY, AGGREGATION_MODE
+    )
+    return()
+    
 end
 
 func _before_withdraw(assets : Uint256, shares : Uint256):
@@ -362,4 +405,42 @@ func approve{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
 ) -> (success : felt):
     ERC4626.approve(spender, amount)
     return (TRUE)
+end
+
+
+#############################################
+##                  TASK                   ##
+#############################################
+
+@view
+func probeTask{
+        syscall_ptr : felt*,
+        pedersen_ptr : HashBuiltin*,
+        range_check_ptr
+    }() -> (taskReady: felt):
+    alloc_locals
+
+    let (lastExecuted) = __lastExecuted.read()
+    let (block_timestamp) = get_block_timestamp()
+    let deadline = lastExecuted + 60
+    let (taskReady) = is_le(deadline, block_timestamp)
+
+    return (taskReady=taskReady)
+end
+
+@external
+func executeTask{
+        syscall_ptr : felt*,
+        pedersen_ptr : HashBuiltin*,
+        range_check_ptr
+    }() -> ():
+    # One could call `probeTask` here; it depends
+    # entirely on the application.
+
+    let (counter) = __counter.read()
+    let new_counter = counter + 1
+    let (block_timestamp) = get_block_timestamp()
+    __lastExecuted.write(block_timestamp)
+    __counter.write(new_counter)
+    return ()
 end
