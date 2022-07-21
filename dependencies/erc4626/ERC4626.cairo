@@ -27,6 +27,7 @@ from dependencies.erc4626.utils.fixedpointmathlib import mul_div_down, mul_div_u
 func constructor{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
         asset : felt, name : felt, symbol : felt):
     ERC4626.initializer(asset, name, symbol)
+    
     return ()
 end
 
@@ -276,7 +277,7 @@ end
 
 @view
 func totalAssets() -> (totalManagedAssets : Uint256):
-    return (Uint256(0, 0))
+    ERC20.
 end
 
 func _before_withdraw(assets : Uint256, shares : Uint256):
@@ -291,4 +292,74 @@ end
 #                  ERC20                    #
 #############################################
 
-# Don't forget to add your favorite ERC20 implementation here.
+@view
+func name{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (name : felt):
+    let (name) = ERC4626.name()
+    return (name)
+end
+
+@view
+func symbol{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (symbol : felt):
+    let (symbol) = ERC4626.symbol()
+    return (symbol)
+end
+
+@view
+func totalSupply{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
+    totalSupply : Uint256
+):
+    let (totalSupply : Uint256) = ERC4626.totalSupply()
+    return (totalSupply)
+end
+
+@view
+func decimals{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
+    decimals : felt
+):
+    let (decimals) = ERC4626.decimals()
+    return (decimals)
+end
+
+@view
+func balanceOf{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    account : felt
+) -> (balance : Uint256):
+    let (balance : Uint256) = ERC4626.balanceOf(account)
+    return (balance)
+end
+
+@view
+func allowance{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    owner : felt, spender : felt
+) -> (remaining : Uint256):
+    let (remaining : Uint256) = ERC4626.allowance(owner, spender)
+    return (remaining)
+end
+
+#
+# Externals
+#
+
+@external
+func transfer{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    recipient : felt, amount : Uint256
+) -> (success : felt):
+    ERC4626.transfer(recipient, amount)
+    return (TRUE)
+end
+
+@external
+func transferFrom{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    sender : felt, recipient : felt, amount : Uint256
+) -> (success : felt):
+    ERC4626.transferFrom(sender, recipient, amount)
+    return (TRUE)
+end
+
+@external
+func approve{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    spender : felt, amount : Uint256
+) -> (success : felt):
+    ERC4626.approve(spender, amount)
+    return (TRUE)
+end
