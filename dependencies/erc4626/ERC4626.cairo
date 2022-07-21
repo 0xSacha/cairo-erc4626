@@ -9,10 +9,14 @@ from starkware.cairo.common.uint256 import ALL_ONES, Uint256, uint256_check, uin
 
 from openzeppelin.token.erc20.interfaces.IERC20 import IERC20
 from openzeppelin.token.erc20.library import ERC20
+from openzeppelin.security.safemath import SafeUint256, 
+
+
 
 from dependencies.erc4626.library import ERC4626, ERC4626_asset, Deposit, Withdraw
 from dependencies.erc4626.utils.fixedpointmathlib import mul_div_down, mul_div_up
-from dependencies.erc4626.interfaces.IJediSwapPair import IJediSwapPair
+from dependencies.erc4626.interfaces.IJediSwapPair import IJediSwapPair, IJediSwapPairERC20
+
 
 
 
@@ -28,14 +32,15 @@ from dependencies.erc4626.interfaces.IJediSwapPair import IJediSwapPair
 
 @constructor
 func constructor{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-        asset : felt, name : felt, symbol : felt, tokenLP1_ : felt, tokenLP2_, oracle_address : felt, tokenLP1_root, tokenLP2_root : felt):
+        asset : felt, name : felt, symbol : felt, tokenLP1_ : felt, tokenLP2_, oracle_address : felt, tokenLP1_root, tokenLP2_root : felt, token1_key:felt, token2_key:felt):
     ERC4626.initializer(asset, name, symbol)
     tokenLP1.write(tokenLP1_)
     tokenLP1_root.write(tokenLP1_root)
     tokenLP2.write(tokenLP2_)
     tokenLP2.write(tokenLP2_root)
     empiric_oracle.write(oracle_address)
-
+    token1_key.write(token1_key)
+    token2_key.write(token2_key)
     return ()
 end
 
@@ -62,6 +67,14 @@ end
 
 @storage_var
 func empiric_oracle() -> (asset: felt):
+end
+
+@storage_var
+func token1_key() -> (asset: felt):
+end
+
+@storage_var
+func token2_key() -> (asset: felt):
 end
 
 
@@ -299,29 +312,64 @@ end
 #           HOOKS TO OVERRIDE               #
 #############################################
 
+
+@view
+func convert_lp_to_eth(lp_amount: felt, lp_address: felt) -> (eth_amount : Uint256):
+    let (asset0_) = IJediSwapPair.token0()
+    let (asset1_) = IJediSwapPair.token1()
+    let (token_eth_key) = get_asset_key(lp_address)
+    let (reserve0_, reserve1_) = IJediSwapPair.get_reserves(tokenLP1_address)
+    let (total_supply_) = IJediSwapPairERC20.totalSupply()
+    let (asset_) = asset()
+    if asset0_ == asset: 
+        let (other_asset_price, decimals, timestamp, num_sources_aggregated) = IEmpiricOracle.get_value(oracle_, token_eth_key, AGGREGATION_MODE)
+        let (amount_in_eth) = SafeUint256.uint256_checked_div_rem(reserve1_ ,other_asset_price)
+        let (lp_price) = mul_div_down(reserve0_, amount_in_eth, total_supply_)
+        let (eth_amount) = SafeUint256.uint256_checked_mul(lp_price, lp_amount)
+        return(eth_amount)
+    else 
+        let (other_asset_price, decimals, timestamp, num_sources_aggregated) = IEmpiricOracle.get_value(oracle_, token_eth_key, AGGREGATION_MODE)
+        let (amount_in_eth) = SafeUint256.uint256_checked_div_rem(reserve0_ ,other_asset_price)
+        let (lp_price) = mul_div_down(reserve1_, amount_in_eth, total_supply_)
+        let (eth_amount) = SafeUint256.uint256_checked_mul(lp_price, lp_amount)
+        return(eth_amount)
+    end
+end
+
+@view
+func get_asset_key(lp_address) -> (key : felt):
+    let (token0 : felt) = tokenLP1.read()
+    let (token1 : felt) = tokenLP1.read()
+    if lp_address == token0: 
+        let (key) = token1_key.read()
+        return(key)
+    else 
+        let (key) = token2_key.read()
+        return(eth_amount)
+    end
+end
+
 @view
 func totalAssets() -> (totalManagedAssets : Uint256):
     let (contract_address) = get_contract_address()
     let (asset_address) = asset()
     let (asset_amount) = IERC20.balance_of(asset_address, contract_address)
+
     let (tokenLP1_address) = tokenLP1.read()
-    let (tokenLP1_amount) = IERC20.balance_of(tokenLP1_address, contract_address)   
+    let (tokenLP1_amount) = IERC20.balance_of(tokenLP1_amount, tokenLP1_address)   
     let (tokenLP2_address) = tokenLP2.read()
     let (tokenLP2_amount) = IERC20.balance_of(tokenLP2_address, contract_address)    
-    let (oracle_) = empiric_oracle.read()
-    let (reserve0_, reserve1_) = IJediSwapPair.get_reserves(tokenLP1_address)
-    let (eth_amount_lp1) = convert_to_eth(reserve0_, reserve1_)
-    let (reserve2_, reserve3_) = IJediSwapPair.get_reserves(tokenLP1_address)
-    let (eth_amount_lp2) = convert_to_eth(reserve2_, reserve3_)
 
-    let (reserve2_
+    let (eth_amount_lp1) = convert_lp_to_eth(tokenLP1_amount, tokenLP1_address)
+    let (eth_amount_lp2) = convert_lp_to_eth(tokenLP2_amount, tokenLP2_address)
 
-    let (other_asset_price, decimals, timestamp, num_sources_aggregated) = IEmpiricOracle.get_value(
-        oracle_, KEY, AGGREGATION_MODE
-    )
-    return()
-    
+    let (lps_to_eth) = SafeUint256.add(eth_amount_lp1, eth_amount_lp2)
+    let totalManagedAssets = SafeUint256(lps_to_eth, asset_amount)
+    return(totalManagedAssets)
 end
+
+
+
 
 func _before_withdraw(assets : Uint256, shares : Uint256):
     return ()
