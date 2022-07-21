@@ -6,6 +6,7 @@ from starkware.cairo.common.bool import TRUE, FALSE
 from starkware.cairo.common.cairo_builtins import HashBuiltin
 from starkware.starknet.common.syscalls import get_caller_address, get_contract_address
 from starkware.cairo.common.uint256 import ALL_ONES, Uint256, uint256_check, uint256_eq
+from starkware.cairo.common.pow import pow
 
 from openzeppelin.token.erc20.interfaces.IERC20 import IERC20
 from openzeppelin.token.erc20.library import ERC20
@@ -16,9 +17,15 @@ from openzeppelin.security.safemath import SafeUint256,
 from dependencies.erc4626.library import ERC4626, ERC4626_asset, Deposit, Withdraw
 from dependencies.erc4626.utils.fixedpointmathlib import mul_div_down, mul_div_up
 from dependencies.erc4626.interfaces.IJediSwapPair import IJediSwapPair, IJediSwapPairERC20
+from dependencies.erc4626.interfaces.IRouter import IRouter
 
 
 
+from starkware.cairo.common.uint256 import (
+
+    uint256_le,
+
+)
 
 # @title Generic ERC4626 vault (copy this to build your own).
 # @description An ERC4626-style vault implementation.
@@ -75,6 +82,10 @@ end
 
 @storage_var
 func token2_key() -> (asset: felt):
+end
+
+@storage_var
+func router() -> (res:felt):
 end
 
 
@@ -314,7 +325,7 @@ end
 
 
 @view
-func convert_lp_to_eth(lp_amount: felt, lp_address: felt) -> (eth_amount : Uint256):
+func convert_lp_to_eth(lp_amount: Uint256, lp_address: felt) -> (eth_amount : Uint256):
     let (asset0_) = IJediSwapPair.token0()
     let (asset1_) = IJediSwapPair.token1()
     let (token_eth_key) = get_asset_key(lp_address)
@@ -334,6 +345,25 @@ func convert_lp_to_eth(lp_amount: felt, lp_address: felt) -> (eth_amount : Uint2
         let (eth_amount) = SafeUint256.uint256_checked_mul(lp_price, lp_amount)
         return(eth_amount)
     end
+end
+
+@view
+func convert_eth_to_lp(eth_amount: Uint256, lp_address: felt) -> (lp_amount : Uint256):
+    let (decimal) = IERC20.decimals(lp_address)
+    let (one_lp) = pow(10, decimal)
+    let (one_lp_uint256) = felt_to_uint256(one_lp) 
+
+    let (asset_) = asset()
+    let (decimal_asset) = IERC20.decimals(asset_)
+    let (one_asset) = pow(10, decimal_asset)
+    let (one_asset_uint256) = felt_to_uint256(one_asset) 
+
+    let (one_lp_uint256) = felt_to_uint256(one_lp) 
+    let (one_lp_to_eth) = convert_lp_to_eth(lp_amount, lp_address)
+    let (one_eth_to_lp) = mul_div_down(one_asset_uint256, one_lp_uint256, one_lp_to_eth)
+
+    let (lp_amount) = SafeUint256.mul(one_eth_to_lp, eth_amount)
+    return(lp_amount)
 end
 
 @view
@@ -467,12 +497,14 @@ func probeTask{
         range_check_ptr
     }() -> (taskReady: felt):
     alloc_locals
-
-    let (lastExecuted) = __lastExecuted.read()
-    let (block_timestamp) = get_block_timestamp()
-    let deadline = lastExecuted + 60
-    let (taskReady) = is_le(deadline, block_timestamp)
-
+    let (contract_address) = get_contract_address()
+    let (asset_) = asset()
+    let (eth_amount) = IERC20.balanceOf(asset_,contract_address)
+    let (gross_asset_value) = totalAssets()
+    let (asset_reserve_percent) = mul_div_down(eth_amount, Uint256(100,0),gross_asset_value)
+    let (is_reserve_too_high) = uint256_le(Uint256(21,0), asset_reserve_percent)
+    let (is_reserve_too_low) = uint256_le(asset_reserve_percent, Uint256(19,0))
+    let taskReady = is_reserve_too_high * is_reserve_too_low
     return (taskReady=taskReady)
 end
 
@@ -482,13 +514,147 @@ func executeTask{
         pedersen_ptr : HashBuiltin*,
         range_check_ptr
     }() -> ():
-    # One could call `probeTask` here; it depends
-    # entirely on the application.
+    let (contract_address) = get_contract_address()
+    let (asset_) = asset()
+    let (eth_amount) = IERC20.balanceOf(asset_,contract_address)
+    let (gross_asset_value) = totalAssets()
+    let (asset_reserve_percent) = mul_div_down(eth_amount, Uint256(100,0),gross_asset_value)
+    let (is_reserve_too_high) = uint256_le(Uint256(21,0), asset_reserve_percent)
+    let (is_reserve_too_low) = uint256_le(asset_reserve_percent, Uint256(19,0))
 
-    let (counter) = __counter.read()
-    let new_counter = counter + 1
-    let (block_timestamp) = get_block_timestamp()
-    __lastExecuted.write(block_timestamp)
-    __counter.write(new_counter)
+    if is_reserve_too_high == 1:
+    let diff = SafeUint256.uint256_checked_sub_le(asset_reserve_percent, Uint256(20,0))
+    let (diff_in_eth) =  uint256_percent(gross_asset_value, diff)
+    feed_strategy(diff_in_eth) 
     return ()
+    else
+    if is_reserve_too_low == 1:
+    let diff = SafeUint256.uint256_checked_sub_le(Uint256(20,0), asset_reserve_percent)
+    let (diff_in_eth) =  uint256_percent(gross_asset_value, diff)
+    feed_reserve(diff_in_eth) 
+    return ()
+    else
+    return ()
+    end
+end
+
+
+
+func feed_reserve{pedersen_ptr : HashBuiltin*, range_check_ptr}(amount : Uint256) -> ():
+   let (asset_) = asset()
+   let (half_amount) = SafeUint256.uint256_checked_div_rem(amount, Uint256(2,0))
+   let (lp1_) = tokenLP1.read()
+   let (lp2_) = tokenLP2.read()
+
+   let (lp_amount1) = convert_eth_to_lp(half_amount, lp1_)
+   let (lp_amount2) = convert_eth_to_lp(half_amount, lp2_)
+    let (contract_address) = get_contract_address()
+    let (deadline) = get_block_timestamp()
+    
+    IERC20.approve(contract_address = lp1_, spender = router, amount = lp_amount1)
+    let (tokenA_) = IJediSwapPair.token0(lp1_)
+    let (tokenB_) = IJediSwapPair.token0(lp1_)
+    let (amountA1: Uint256, amountB1: Uint256) = IRouter.remove_liquidity(contract_address = router, tokenA = tokenA_, tokenB = tokenB_, liquidity = lp_amount1, amountAMin = Uint256(0,0), amountBMin = Uint256(0,0), to = contract_address, deadline = deadline )
+    if tokenB_ == asset_:
+        IERC20.approve(contract_address = tokenA_, spender = router, amount = amountA1)
+        let (local path : felt*) = alloc()
+        assert [path] = tokenA_
+        assert [path+1] = asset_
+        let path_len = 2
+        IRouter.swap_exact_tokens_for_tokens(contract_address = router, amountIn = amountA1, amountOutMin = Uint256(0,0), path_len = path_len, path = path, to = contract_address, deadline = deadline) 
+    else:
+        IERC20.approve(contract_address = tokenB_, spender = router, amount = amountB1)
+        let (local path : felt*) = alloc()
+        assert [path] = tokenB_
+        assert [path+1] = asset_
+        let path_len = 2
+        IRouter.swap_exact_tokens_for_tokens(contract_address = router, amountIn = amountB1, amountOutMin = Uint256(0,0), path_len = path_len, path = path, to = contract_address, deadline = deadline) 
+    end
+
+    IERC20.approve(contract_address = lp2_, spender = router, amount = lp_amount2)
+    let (tokenA2_) = IJediSwapPair.token0(lp2_)
+    let (tokenB2_) = IJediSwapPair.token0(lp2_)
+    let (amountA2: Uint256, amountB2: Uint256) = IRouter.remove_liquidity(contract_address = router, tokenA = tokenA2_, tokenB = tokenB2_, liquidity = lp_amount2, amountAMin = Uint256(0,0), amountBMin = Uint256(0,0), to = contract_address, deadline = deadline )
+    if tokenB2_ == asset_:
+        IERC20.approve(contract_address = tokenA2_, spender = router, amount = amountA2)
+        let (local path2 : felt*) = alloc()
+        assert [path2] = tokenA_
+        assert [path2+1] = asset_
+        let path_len = 2
+        IRouter.swap_exact_tokens_for_tokens(contract_address = router, amountIn = amountA2, amountOutMin = Uint256(0,0), path_len = path_len, path = path2, to = contract_address, deadline = deadline) 
+    else:
+        IERC20.approve(contract_address = tokenB_, spender = router, amount = amountB2)
+        let (local path2 : felt*) = alloc()
+        assert [path2] = tokenB_
+        assert [path2+1] = asset_
+        let path_len = 2
+        IRouter.swap_exact_tokens_for_tokens(contract_address = router, amountIn = amountB1, amountOutMin = Uint256(0,0), path_len = path_len, path = path2, to = contract_address, deadline = deadline) 
+    end
+    return ()
+end
+
+func feed_strategy{pedersen_ptr : HashBuiltin*, range_check_ptr}(amount : Uint256) -> ():
+    let (asset_) = asset()
+
+    let (lp1_) = tokenLP1.read()
+    let (token0_lp1) = IJediSwapPair.token0(lp1_)
+    let (token1_lp1) = IJediSwapPair.token1(lp1_)
+    if token0_ == asset_:
+    let (token_lp1_other) = token0_lp1
+    else
+    let (token_lp1_other) = token1_lp1
+    end
+
+
+    let (lp2_) = tokenLP2.read()
+    let (token0_lp2) = IJediSwapPair.token0(lp2_)
+    let (token1_lp2) = IJediSwapPair.token1(lp2_)
+    if token0_ == asset_:
+    let (token_lp2_other) = token0_lp2
+    else
+    let (token_lp2_other) = token1_lp2
+    end
+
+
+    let (half_amount) = SafeUint256.uint256_checked_div_rem(amount, Uint256(2,0))
+    let (router_) = router.read()
+    ## lp1
+
+    let (half_amount_1) = SafeUint256.uint256_checked_div_rem(half_amount, Uint256(2,0))
+    IERC20.approve(asset_, router_, half_amount_1)
+    let (deadline) = get_block_timestamp()
+    let (local path : felt*) = alloc()
+    assert [path] = asset
+    assert [path+1] = token_lp1_other
+    let path_len = 2
+    let (amounts_len: felt, amounts: Uint256*) = IRouter.swap_exact_tokens_for_tokens(contract_address = router, amountIn = half_amount_1, amountOutMin = Uint256(0,0), path_len = path_len, path = path, to = contract_address, deadline = deadline) 
+
+    IERC20.approve(contract_address = asset, spender = router, amount = half_amount_1)
+    IERC20.approve(contract_address = token_lp1_other, spender = router, amount = [amounts])
+    IRouter.add_liquidity(contract_address = router, tokenA = asset, tokenB = [amounts], amountADesired = half_amount_1, amountBDesired = [amounts], amountAMin = Uint256(0,0), amountBMin = Uint256(0,0), to = contract_address, deadline = deadline )
+
+    ## lp2
+
+    IERC20.approve(asset_, router_, half_amount_1)
+    let (deadline) = get_block_timestamp()
+    let (local path2 : felt*) = alloc()
+    assert [path2] = asset
+    assert [path2+1] = token_lp2_other
+    let path_len = 2
+    let (amounts2_len: felt, amounts2: Uint256*) = IRouter.swap_exact_tokens_for_tokens(contract_address = router, amountIn = half_amount_1, amountOutMin = Uint256(0,0), path_len = path_len, path = path, to = contract_address, deadline = deadline) 
+
+    IERC20.approve(contract_address = asset, spender = router, amount = half_amount_1)
+    IERC20.approve(contract_address = token_lp2_other, spender = router, amount = [amounts2])
+    IRouter.add_liquidity(contract_address = router, tokenA = asset, tokenB = token_lp2_other, amountADesired = half_amount_1, amountBDesired = [amounts], amountAMin = Uint256(0,0), amountBMin = Uint256(0,0), to = contract_address, deadline = deadline )
+    return ()
+end
+
+
+func uint256_percent{pedersen_ptr : HashBuiltin*, range_check_ptr}(
+    x : Uint256, percent : Uint256
+) -> (res : Uint256):
+    let (mul, _high) = uint256_mul(x, percent)
+    let (hundred) = felt_to_uint256(100)
+    let (res) = uint256_div(mul, hundred)
+    return (res=res)
 end
