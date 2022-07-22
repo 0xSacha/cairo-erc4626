@@ -15,12 +15,18 @@ from starkware.starknet.common.syscalls import (
     get_contract_address
 )
 
+from starkware.cairo.common.bool import TRUE, FALSE
+
 from openzeppelin.token.erc20.interfaces.IERC20 import IERC20
 from openzeppelin.token.erc20.library import (
-    ERC20,
-    ERC20_allowances
+    ERC20
+    #ERC20_allowances
 )
-from openzeppelin.security.safemath import uint256_checked_sub_le
+
+#from openzeppelin.security.safemath import uint256_checked_sub_le
+from openzeppelin.security.safemath import SafeUint256
+
+
 
 from dependencies.erc4626.utils.fixedpointmathlib import mul_div_up, mul_div_down
 
@@ -66,7 +72,7 @@ namespace ERC4626:
         ):
         alloc_locals
         let (decimals) = IERC20.decimals(contract_address=asset)
-        ERC20.constructor(name, symbol, decimals)
+        ERC20.initializer(name, symbol, decimals)
         ERC4626_asset.write(asset)
         return ()
     end
@@ -75,13 +81,10 @@ namespace ERC4626:
     ##               GETTER               ##
     #############################################
 
-    func get_asset() -> (asset: felt):
+    func get_asset{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (asset: felt):
         let (asset) = ERC4626_asset.read()
         return (asset)
     end
-
-
-
 
 
     #############################################
@@ -117,17 +120,16 @@ namespace ERC4626:
             uint256_check(subtracted_value)
         end
 
-        let (current_allowance: Uint256) = ERC20_allowances.read(owner=owner, spender=spender)
+        let (current_allowance: Uint256) = ERC20.allowance(owner=owner, spender=spender)
 
         with_attr error_message("ERC20: allowance below zero"):
-            let (new_allowance: Uint256) = uint256_checked_sub_le(current_allowance, subtracted_value)
+            let (new_allowance: Uint256) = SafeUint256.sub_le(current_allowance, subtracted_value)
         end
 
         ERC20._approve(owner, spender, new_allowance)
         return ()
     end
 
-end
 
 
     #############################################
@@ -135,74 +137,77 @@ end
     #############################################
 
 
-@view
-func name{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (name : felt):
-    let (name) = ERC20.name()
-    return (name)
-end
+    @view
+    func name{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (name : felt):
+        let (name) = ERC20.name()
+        return (name)
+    end
 
-@view
-func symbol{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (symbol : felt):
-    let (symbol) = ERC20.symbol()
-    return (symbol)
-end
+    @view
+    func symbol{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (symbol : felt):
+        let (symbol) = ERC20.symbol()
+        return (symbol)
+    end
 
-@view
-func totalSupply{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
-    totalSupply : Uint256
-):
-    let (totalSupply : Uint256) = ERC20.total_supply()
-    return (totalSupply)
-end
+    @view
+    func totalSupply{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
+        totalSupply : Uint256
+    ):
+        let (totalSupply : Uint256) = ERC20.total_supply()
+        return (totalSupply)
+    end
 
-@view
-func decimals{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
-    decimals : felt
-):
-    let (decimals) = ERC20.decimals()
-    return (decimals)
-end
+    @view
+    func decimals{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}() -> (
+        decimals : felt
+    ):
+        let (decimals) = ERC20.decimals()
+        return (decimals)
+    end
 
-@view
-func balanceOf{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    account : felt
-) -> (balance : Uint256):
-    let (balance : Uint256) = ERC20.balance_of(account)
-    return (balance)
-end
+    @view
+    func balanceOf{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+        account : felt
+    ) -> (balance : Uint256):
+        let (balance : Uint256) = ERC20.balance_of(account)
+        return (balance)
+    end
 
-@view
-func allowance{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    owner : felt, spender : felt
-) -> (remaining : Uint256):
-    let (remaining : Uint256) = ERC20.allowance(owner, spender)
-    return (remaining)
-end
+    @view
+    func allowance{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+        owner : felt, spender : felt
+    ) -> (remaining : Uint256):
+        let (remaining : Uint256) = ERC20.allowance(owner, spender)
+        return (remaining)
+    end
 
 #
 # Externals
 #
 
-@external
-func transfer{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    recipient : felt, amount : Uint256
-) -> (success : felt):
-    ERC20.transfer(recipient, amount)
-    return (TRUE)
-end
+    @external
+    func transfer{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+        recipient : felt, amount : Uint256
+    ) -> (success : felt):
+        ERC20.transfer(recipient, amount)
+        return (TRUE)
+    end
 
-@external
-func transferFrom{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    sender : felt, recipient : felt, amount : Uint256
-) -> (success : felt):
-    ERC20.transfer_from(sender, recipient, amount)
-    return (TRUE)
-end
+    @external
+    func transferFrom{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+        sender : felt, recipient : felt, amount : Uint256
+    ) -> (success : felt):
+        ERC20.transfer_from(sender, recipient, amount)
+        return (TRUE)
+    end
 
-@external
-func approve{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
-    spender : felt, amount : Uint256
-) -> (success : felt):
-    ERC20.approve(spender, amount)
-    return (TRUE)
+    @external
+    func approve{syscall_ptr : felt*, pedersen_ptr : HashBuiltin*, range_check_ptr}(
+        spender : felt, amount : Uint256
+    ) -> (success : felt):
+        ERC20.approve(spender, amount)
+        return (TRUE)
+    end
+
+
 end
